@@ -1,4 +1,4 @@
-FROM alpine:3.12
+FROM alpine:3.15
 LABEL maintainer="Team ACID @ Zalando <team-acid@zalando.de>"
 
 # We need root certificates to deal with teams api over https

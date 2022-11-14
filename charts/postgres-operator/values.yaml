@@ -38,7 +38,7 @@ configGeneral:
   # etcd connection string for Patroni. Empty uses K8s-native DCS.
   etcd_host: ""
   # Spilo docker image
-  docker_image: registry.opensource.zalan.do/acid/spilo-14:2.1-p6
+  docker_image: registry.opensource.zalan.do/acid/spilo-14:2.1-p7
 
   # key name for annotation to ignore globally configured instance limits
   # ignore_instance_limits_annotation_key: ""
@@ -129,6 +129,8 @@ configKubernetes:
   enable_pod_antiaffinity: false
   # toggles PDB to set to MinAvailabe 0 or 1
   enable_pod_disruption_budget: true
+  # toogles readiness probe for database pods
+  enable_readiness_probe: false
   # enables sidecar containers to run alongside Spilo in the same pod
   enable_sidecars: true
 

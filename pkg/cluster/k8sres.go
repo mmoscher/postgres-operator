@@ -13,7 +13,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	policybeta1 "k8s.io/api/policy/v1beta1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,7 +29,6 @@ import (
 	"github.com/zalando/postgres-operator/pkg/util/patroni"
 	"github.com/zalando/postgres-operator/pkg/util/retryutil"
 	batchv1 "k8s.io/api/batch/v1"
-	batchv1beta1 "k8s.io/api/batch/v1beta1"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -798,10 +797,9 @@ func (c *Cluster) generatePodTemplate(
 
 // generatePodEnvVars generates environment variables for the Spilo Pod
 func (c *Cluster) generateSpiloPodEnvVars(
+	spec *acidv1.PostgresSpec,
 	uid types.UID,
-	spiloConfiguration string,
-	cloneDescription *acidv1.CloneDescription,
-	standbyDescription *acidv1.StandbyDescription) []v1.EnvVar {
+	spiloConfiguration string) ([]v1.EnvVar, error) {
 
 	// hard-coded set of environment variables we need
 	// to guarantee core functionality of the operator
@@ -907,24 +905,24 @@ func (c *Cluster) generateSpiloPodEnvVars(
 		envVars = append(envVars, v1.EnvVar{Name: "KUBERNETES_USE_CONFIGMAPS", Value: "true"})
 	}
 
-	if cloneDescription != nil && cloneDescription.ClusterName != "" {
-		envVars = append(envVars, c.generateCloneEnvironment(cloneDescription)...)
+	if spec.Clone != nil && spec.Clone.ClusterName != "" {
+		envVars = append(envVars, c.generateCloneEnvironment(spec.Clone)...)
 	}
 
-	if standbyDescription != nil {
-		envVars = append(envVars, c.generateStandbyEnvironment(standbyDescription)...)
+	if spec.StandbyCluster != nil {
+		envVars = append(envVars, c.generateStandbyEnvironment(spec.StandbyCluster)...)
 	}
 
 	// fetch cluster-specific variables that will override all subsequent global variables
-	if len(c.Spec.Env) > 0 {
-		envVars = appendEnvVars(envVars, c.Spec.Env...)
+	if len(spec.Env) > 0 {
+		envVars = appendEnvVars(envVars, spec.Env...)
 	}
 
 	// fetch variables from custom environment Secret
 	// that will override all subsequent global variables
 	secretEnvVarsList, err := c.getPodEnvironmentSecretVariables()
 	if err != nil {
-		c.logger.Warningf("%v", err)
+		return nil, err
 	}
 	envVars = appendEnvVars(envVars, secretEnvVarsList...)
 
@@ -932,7 +930,7 @@ func (c *Cluster) generateSpiloPodEnvVars(
 	// that will override all subsequent global variables
 	configMapEnvVarsList, err := c.getPodEnvironmentConfigMapVariables()
 	if err != nil {
-		c.logger.Warningf("%v", err)
+		return nil, err
 	}
 	envVars = appendEnvVars(envVars, configMapEnvVarsList...)
 
@@ -968,7 +966,7 @@ func (c *Cluster) generateSpiloPodEnvVars(
 
 	envVars = appendEnvVars(envVars, opConfigEnvVars...)
 
-	return envVars
+	return envVars, nil
 }
 
 func appendEnvVars(envs []v1.EnvVar, appEnv ...v1.EnvVar) []v1.EnvVar {
@@ -1119,17 +1117,18 @@ func extractPgVersionFromBinPath(binPath string, template string) (string, error
 
 func generateSpiloReadinessProbe() *v1.Probe {
 	return &v1.Probe{
+		FailureThreshold: 3,
 		Handler: v1.Handler{
 			HTTPGet: &v1.HTTPGetAction{
-				Path: "/readiness",
-				Port: intstr.IntOrString{IntVal: patroni.ApiPort},
+				Path:   "/readiness",
+				Port:   intstr.IntOrString{IntVal: patroni.ApiPort},
+				Scheme: v1.URISchemeHTTP,
 			},
 		},
 		InitialDelaySeconds: 6,
 		PeriodSeconds:       10,
-		TimeoutSeconds:      5,
 		SuccessThreshold:    1,
-		FailureThreshold:    3,
+		TimeoutSeconds:      5,
 	}
 }
 
@@ -1186,11 +1185,10 @@ func (c *Cluster) generateStatefulSet(spec *acidv1.PostgresSpec) (*appsv1.Statef
 	}
 
 	// generate environment variables for the spilo container
-	spiloEnvVars := c.generateSpiloPodEnvVars(
-		c.Postgresql.GetUID(),
-		spiloConfiguration,
-		spec.Clone,
-		spec.StandbyCluster)
+	spiloEnvVars, err := c.generateSpiloPodEnvVars(spec, c.Postgresql.GetUID(), spiloConfiguration)
+	if err != nil {
+		return nil, fmt.Errorf("could not generate Spilo env vars: %v", err)
+	}
 
 	// pickup the docker image for the spilo container
 	effectiveDockerImage := util.Coalesce(spec.DockerImage, c.OpConfig.DockerImage)
@@ -1280,7 +1278,9 @@ func (c *Cluster) generateStatefulSet(spec *acidv1.PostgresSpec) (*appsv1.Statef
 	)
 
 	// Patroni responds 200 to probe only if it either owns the leader lock or postgres is running and DCS is accessible
-	spiloContainer.ReadinessProbe = generateSpiloReadinessProbe()
+	if c.OpConfig.EnableReadinessProbe {
+		spiloContainer.ReadinessProbe = generateSpiloReadinessProbe()
+	}
 
 	// generate container specs for sidecars specified in the cluster manifest
 	clusterSpecificSidecars := []v1.Container{}
@@ -1980,7 +1980,7 @@ func (c *Cluster) generateStandbyEnvironment(description *acidv1.StandbyDescript
 	return result
 }
 
-func (c *Cluster) generatePodDisruptionBudget() *policybeta1.PodDisruptionBudget {
+func (c *Cluster) generatePodDisruptionBudget() *policyv1.PodDisruptionBudget {
 	minAvailable := intstr.FromInt(1)
 	pdbEnabled := c.OpConfig.EnablePodDisruptionBudget
 
@@ -1989,14 +1989,14 @@ func (c *Cluster) generatePodDisruptionBudget() *policybeta1.PodDisruptionBudget
 		minAvailable = intstr.FromInt(0)
 	}
 
-	return &policybeta1.PodDisruptionBudget{
+	return &policyv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        c.podDisruptionBudgetName(),
 			Namespace:   c.Namespace,
 			Labels:      c.labelsSet(true),
 			Annotations: c.annotationsSet(nil),
 		},
-		Spec: policybeta1.PodDisruptionBudgetSpec{
+		Spec: policyv1.PodDisruptionBudgetSpec{
 			MinAvailable: &minAvailable,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: c.roleLabelsSet(false, Master),
@@ -2014,7 +2014,7 @@ func (c *Cluster) getClusterServiceConnectionParameters(clusterName string) (hos
 	return
 }
 
-func (c *Cluster) generateLogicalBackupJob() (*batchv1beta1.CronJob, error) {
+func (c *Cluster) generateLogicalBackupJob() (*batchv1.CronJob, error) {
 
 	var (
 		err                  error
@@ -2105,7 +2105,7 @@ func (c *Cluster) generateLogicalBackupJob() (*batchv1beta1.CronJob, error) {
 
 	// configure a cron job
 
-	jobTemplateSpec := batchv1beta1.JobTemplateSpec{
+	jobTemplateSpec := batchv1.JobTemplateSpec{
 		Spec: jobSpec,
 	}
 
@@ -2114,17 +2114,17 @@ func (c *Cluster) generateLogicalBackupJob() (*batchv1beta1.CronJob, error) {
 		schedule = c.OpConfig.LogicalBackupSchedule
 	}
 
-	cronJob := &batchv1beta1.CronJob{
+	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        c.getLogicalBackupJobName(),
 			Namespace:   c.Namespace,
 			Labels:      c.labelsSet(true),
 			Annotations: c.annotationsSet(nil),
 		},
-		Spec: batchv1beta1.CronJobSpec{
+		Spec: batchv1.CronJobSpec{
 			Schedule:          schedule,
 			JobTemplate:       jobTemplateSpec,
-			ConcurrencyPolicy: batchv1beta1.ForbidConcurrent,
+			ConcurrencyPolicy: batchv1.ForbidConcurrent,
 		},
 	}
 

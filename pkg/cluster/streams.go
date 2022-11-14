@@ -279,6 +279,7 @@ func (c *Cluster) syncStreams() error {
 	c.streamApplications = appIds
 
 	slots := make(map[string]map[string]string)
+	slotsToSync := make(map[string]map[string]string)
 	publications := make(map[string]map[string]acidv1.StreamTable)
 
 	requiredPatroniConfig := c.Spec.Patroni
@@ -308,9 +309,22 @@ func (c *Cluster) syncStreams() error {
 		}
 	}
 
-	// no slots = no streams defined
-	if len(slots) > 0 {
-		requiredPatroniConfig.Slots = slots
+	// create publications to each created slot
+	c.logger.Debug("syncing database publications")
+	for publication, tables := range publications {
+		// but first check for existing publications
+		dbName := slots[publication]["database"]
+		err = c.syncPublication(publication, dbName, tables)
+		if err != nil {
+			c.logger.Warningf("could not sync publication %q in database %q: %v", publication, dbName, err)
+			continue
+		}
+		slotsToSync[publication] = slots[publication]
+	}
+
+	// no slots to sync = no streams defined or publications created
+	if len(slotsToSync) > 0 {
+		requiredPatroniConfig.Slots = slotsToSync
 	} else {
 		return nil
 	}
@@ -326,17 +340,7 @@ func (c *Cluster) syncStreams() error {
 		return nil
 	}
 
-	// next, create publications to each created slot
-	c.logger.Debug("syncing database publications")
-	for publication, tables := range publications {
-		// but first check for existing publications
-		dbName := slots[publication]["database"]
-		err = c.syncPublication(publication, dbName, tables)
-		if err != nil {
-			c.logger.Warningf("could not sync publication %q in database %q: %v", publication, dbName, err)
-		}
-	}
-
+	// after Postgres was restarted we can create stream CRDs
 	err = c.createOrUpdateStreams()
 	if err != nil {
 		return err

@@ -28,6 +28,7 @@ configuration.
   and change it.
 
   To test the CRD-based configuration locally, use the following
+
   ```bash
   kubectl create -f manifests/operatorconfiguration.crd.yaml # registers the CRD
   kubectl create -f manifests/postgresql-operator-default-configuration.yaml
@@ -488,6 +489,14 @@ configuration they are grouped under the `kubernetes` key.
   specify the [pod management policy](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#pod-management-policies)
   of stateful sets of PG clusters. The default is `ordered_ready`, the second
   possible value is `parallel`.
+
+* **enable_readiness_probe**
+  the operator can set a readiness probe on the statefulset for the database
+  pods with `InitialDelaySeconds: 6`, `PeriodSeconds: 10`, `TimeoutSeconds: 5`,
+  `SuccessThreshold: 1` and `FailureThreshold: 3`. When enabling readiness
+  probes it is recommended to switch the `pod_management_policy` to `parallel`
+  to avoid unneccesary waiting times in case of multiple instances failing.
+  The default is `false`.
 
 * **storage_resize_mode**
   defines how operator handles the difference between the requested volume size and
