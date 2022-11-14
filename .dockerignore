@@ -1,0 +1,5 @@
+.git
+.github/
+charts/
+e2e/
+docker/
