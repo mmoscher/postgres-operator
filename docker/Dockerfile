@@ -7,7 +7,7 @@ ARG TARGETARCH=amd64
 
 ENV GO111MODULE=on
 
-WORKDIR /src
+WORKDIR /
 COPY . .
 
 RUN go get -d k8s.io/client-go@kubernetes-1.22.4
@@ -17,7 +17,6 @@ RUN go mod vendor
 
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 go build -o build/linux/postgres-operator -v -ldflags "-X=main.version=modac" cmd/main.go
 
-
 FROM alpine:3.15 AS postgres-operator
 LABEL maintainer="Team ACID @ Zalando <team-acid@zalando.de>"
 
@@ -25,7 +24,7 @@ LABEL maintainer="Team ACID @ Zalando <team-acid@zalando.de>"
 RUN apk --no-cache add curl
 RUN apk --no-cache add ca-certificates
 
-COPY --from=go-builder /src/build/linux/postgres-operator /
+COPY --from=go-builder /build/linux/postgres-operator /
 
 RUN addgroup -g 1000 pgo
 RUN adduser -D -u 1000 -G pgo -g 'Postgres Operator' pgo
