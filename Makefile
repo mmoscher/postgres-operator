@@ -70,7 +70,17 @@ docker: ${DOCKERDIR}/${DOCKERFILE} docker-context
 	echo "Version ${VERSION}"
 	echo "CDP tag ${CDP_TAG}"
 	echo "git describe $(shell git describe --tags --always --dirty)"
-	cd "${DOCKERDIR}" && docker build --rm -t "$(IMAGE):$(TAG)$(CDP_TAG)$(DEBUG_FRESH)$(DEBUG_POSTFIX)" -f "${DOCKERFILE}" .
+	if ! docker buildx ls | grep -q "zalando-builder"; then \
+		docker buildx create --name zalando-builder; \
+	fi;
+	docker buildx build \
+		--rm \
+		--builder zalando-builder \
+		--platform linux/arm64,linux/amd64 \
+		--tag $(IMAGE):$(TAG)$(CDP_TAG)$(DEBUG_FRESH)$(DEBUG_POSTFIX) \
+		--push \
+		--file "${DOCKERDIR}/${DOCKERFILE}" \
+		.
 
 indocker-race:
 	docker run --rm -v "${GOPATH}":"${GOPATH}" -e GOPATH="${GOPATH}" -e RACE=1 -w ${PWD} golang:1.17.3 bash -c "make linux"
