@@ -1,5 +1,4 @@
 ARG ALPINE_VERSION=3.15
-ARG BUILDPLATFORM=linux/amd64
 FROM --platform=$BUILDPLATFORM ${DOCKER_REGISTRY:+$DOCKER_REGISTRY/}golang:1.17-alpine${ALPINE_VERSION} as go-builder
 
 ARG TARGETOS
@@ -17,7 +16,7 @@ RUN go mod vendor
 
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 go build -o build/linux/postgres-operator -v -ldflags "-X=main.version=modac" cmd/main.go
 
-FROM alpine:3.15 AS postgres-operator
+FROM  --platform=$TARGETPLATFORM alpine:3.15 AS postgres-operator
 LABEL maintainer="Team ACID @ Zalando <team-acid@zalando.de>"
 
 # We need root certificates to deal with teams api over https
